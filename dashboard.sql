@@ -1,57 +1,15 @@
-use "dashboard.db";
-
-import customtkinter as ctk
+import customtkinter as ctk  # pyright: ignore[reportMissingImports]
 from tkinter import ttk, messagebox, filedialog
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import sqlite3
+import matplotlib.pyplot as plt  # pyright: ignore[reportMissingModuleSource]
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # pyright: ignore[reportMissingModuleSource]
 import csv
+import os
+import db
 
-def init_db():
-    conn = sqlite3.connect("inventory.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            product TEXT NOT NULL,
-            quantity INTEGER NOT NULL,
-            status TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
+# Ensure DB and tables exist (init_db will create DB/tables if required)
+db.init_db()
 
-def fetch_products():
-    conn = sqlite3.connect("inventory.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT product, quantity, status FROM products")
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"product": r[0], "quantity": r[1], "status": r[2]} for r in rows]
-
-def insert_product(product, quantity, status):
-    conn = sqlite3.connect("inventory.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO products (product, quantity, status) VALUES (?, ?, ?)", (product, quantity, status))
-    conn.commit()
-    conn.close()
-
-def update_product_db(old_name, new_product, quantity, status):
-    conn = sqlite3.connect("inventory.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE products SET product=?, quantity=?, status=? WHERE product=?", 
-                   (new_product, quantity, status, old_name))
-    conn.commit()
-    conn.close()
-
-def delete_product_db(product_name):
-    conn = sqlite3.connect("inventory.db")
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM products WHERE product=?", (product_name,))
-    conn.commit()
-    conn.close()
-
-# ===================== GUI SETUP =====================
+# App Setup
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
@@ -60,18 +18,18 @@ app.title("Inventory Management System")
 app.geometry("1000x700")
 app.resizable(True, True)
 
-# Initialize DB
-init_db()
-product_data = fetch_products()
-selected_item = None
+# Global Variables
+product_data = []  # list of dicts: {id, product, quantity, status}
+selected_item = None  # Treeview iid (string)
 
-# ===================== FUNCTIONS =====================
+
 def show_frame(frame):
     frame.tkraise()
     if frame == dashboard_frame:
         update_dashboard()
     elif frame == reports_frame:
         update_chart()
+
 
 def get_status_from_quantity(quantity):
     if quantity == 0:
@@ -81,44 +39,44 @@ def get_status_from_quantity(quantity):
     else:
         return "In Stock"
 
+
 def add_product():
     product = entry_product.get().strip()
-    quantity = entry_quantity.get().strip()
+    quantity_text = entry_quantity.get().strip()
 
-    if not (product and quantity.isdigit()):
+    if not (product and quantity_text.isdigit()):
         messagebox.showwarning("Input Error", "Please enter a valid product name and numeric quantity.")
         return
 
-    quantity = int(quantity)
+    quantity = int(quantity_text)
     status = get_status_from_quantity(quantity)
 
-    insert_product(product, quantity, status)
-    product_data.append({"product": product, "quantity": quantity, "status": status})
+    new_id = db.insert_product(product, quantity, status)
 
-    tree_products.insert("", "end", values=(product, quantity, status))
+    item = {"id": new_id, "product": product, "quantity": quantity, "status": status}
+    product_data.append(item)
+    tree_products.insert("", "end", iid=str(new_id), values=(product, quantity, status))
 
     if status in ("Low Stock", "Out of Stock"):
         messagebox.showwarning("Stock Warning", f"'{product}' is {status}!")
 
     entry_product.delete(0, "end")
     entry_quantity.delete(0, "end")
-
     update_dashboard()
+
 
 def select_product(event):
     global selected_item
     selected_item = tree_products.focus()
-
     if not selected_item:
         return
-
     values = tree_products.item(selected_item, "values")
     if values:
         entry_product.delete(0, "end")
         entry_quantity.delete(0, "end")
-
         entry_product.insert(0, values[0])
         entry_quantity.insert(0, values[1])
+
 
 def update_product():
     global selected_item
@@ -127,23 +85,22 @@ def update_product():
         return
 
     product = entry_product.get().strip()
-    quantity = entry_quantity.get().strip()
+    quantity_text = entry_quantity.get().strip()
 
-    if not (product and quantity.isdigit()):
+    if not (product and quantity_text.isdigit()):
         messagebox.showwarning("Input Error", "Please enter valid product name and numeric quantity.")
         return
 
-    quantity = int(quantity)
+    quantity = int(quantity_text)
     status = get_status_from_quantity(quantity)
+    product_id = int(selected_item)
 
-    old_values = tree_products.item(selected_item, "values")
-
-    update_product_db(old_values[0], product, quantity, status)
+    db.update_product(product_id, product, quantity, status)
 
     tree_products.item(selected_item, values=(product, quantity, status))
 
     for item in product_data:
-        if item["product"] == old_values[0]:
+        if item["id"] == product_id:
             item["product"] = product
             item["quantity"] = quantity
             item["status"] = status
@@ -154,6 +111,7 @@ def update_product():
 
     update_dashboard()
     messagebox.showinfo("Updated", "Product updated successfully.")
+
 
 def delete_product():
     global selected_item
@@ -166,10 +124,11 @@ def delete_product():
     if not confirm:
         return
 
-    delete_product_db(values[0])
+    product_id = int(selected_item)
+    db.delete_product(product_id)
 
     tree_products.delete(selected_item)
-    product_data[:] = [p for p in product_data if p["product"] != values[0]]
+    product_data[:] = [p for p in product_data if p["id"] != product_id]
     selected_item = None
 
     entry_product.delete(0, "end")
@@ -177,6 +136,7 @@ def delete_product():
 
     update_dashboard()
     messagebox.showinfo("Deleted", "Product deleted successfully.")
+
 
 def update_dashboard():
     total_products = len(product_data)
@@ -206,13 +166,13 @@ def update_dashboard():
     canvas.draw()
     canvas.get_tk_widget().pack(fill="both", expand=True)
 
+
 def export_to_csv():
     if not product_data:
         messagebox.showinfo("No Data", "No data available to export.")
         return
 
-    filepath = filedialog.asksaveasfilename(defaultextension=".csv",
-                                            filetypes=[("CSV Files", "*.csv")])
+    filepath = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV Files", "*.csv")])
     if not filepath:
         return
 
@@ -223,6 +183,7 @@ def export_to_csv():
             writer.writerow([item["product"], item["quantity"], item["status"]])
 
     messagebox.showinfo("Export Successful", f"Data exported to {filepath}")
+
 
 def update_chart():
     for widget in chart_frame.winfo_children():
@@ -247,6 +208,7 @@ def update_chart():
     canvas.draw()
     canvas.get_tk_widget().pack(fill="both", expand=True)
 
+
 def search_products(event=None):
     query = search_entry.get().strip().lower()
 
@@ -254,15 +216,19 @@ def search_products(event=None):
         tree_products.delete(item)
 
     for p in product_data:
-        if (query in p["product"].lower() or
-            query in str(p["quantity"]).lower() or
-            query in p["status"].lower()):
-            tree_products.insert("", "end", values=(p["product"], p["quantity"], p["status"]))
+        if (
+            query in p["product"].lower()
+            or query in str(p["quantity"]).lower()
+            or query in p["status"].lower()
+        ):
+            tree_products.insert("", "end", iid=str(p["id"]), values=(p["product"], p["quantity"], p["status"]))
 
-# ===================== UI LAYOUT =====================
+
+# ----------------- UI Layout -----------------
 container = ctk.CTkFrame(app, fg_color="white")
 container.pack(fill="both", expand=True)
 
+# Top Bar
 topbar = ctk.CTkFrame(container, fg_color="#C9E6FF", height=50)
 topbar.pack(fill="x")
 
@@ -270,6 +236,7 @@ search_entry = ctk.CTkEntry(topbar, placeholder_text="Search...", width=200)
 search_entry.pack(side="right", padx=20, pady=10)
 search_entry.bind("<KeyRelease>", search_products)
 
+# Navigation Tabs
 nav_frame = ctk.CTkFrame(container, fg_color="white")
 nav_frame.pack(fill="x", pady=10)
 
@@ -291,6 +258,7 @@ lbl_total_quantity = ctk.CTkLabel(dashboard_frame, text="Total Quantity: 0", fon
 lbl_total_quantity.pack(pady=5)
 lbl_low_stock = ctk.CTkLabel(dashboard_frame, text="Low Stock Items (≤10): 0", font=("Arial", 18))
 lbl_low_stock.pack(pady=5)
+
 dashboard_chart_frame = ctk.CTkFrame(dashboard_frame, fg_color="white")
 dashboard_chart_frame.pack(fill="both", expand=True, pady=20)
 
@@ -303,10 +271,7 @@ tree_products.heading("Status", text="STATUS")
 tree_products.pack(padx=20, pady=20, fill="both", expand=True, side="left")
 tree_products.bind("<<TreeviewSelect>>", select_product)
 
-# Load initial data
-for p in product_data:
-    tree_products.insert("", "end", values=(p["product"], p["quantity"], p["status"]))
-
+# Side Entry Fields
 side_frame = ctk.CTkFrame(products_frame, fg_color="white")
 side_frame.pack(side="right", fill="y", padx=20)
 entry_product = ctk.CTkEntry(side_frame, placeholder_text="Product Name")
@@ -329,9 +294,15 @@ btn_export.pack(pady=(0, 10))
 chart_frame = ctk.CTkFrame(reports_frame, fg_color="white")
 chart_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
-# Frame Layout
+# Frame Layout Order
 for frame in (dashboard_frame, products_frame, reports_frame):
     frame.place(in_=container, x=0, y=100, relwidth=1, relheight=1)
+
+
+# ----------------- Load initial data from DB -----------------
+product_data = db.fetch_products()
+for p in product_data:
+    tree_products.insert("", "end", iid=str(p["id"]), values=(p["product"], p["quantity"], p["status"]))
 
 show_frame(dashboard_frame)
 app.mainloop()

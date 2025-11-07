@@ -1,131 +1,178 @@
-use "homepage.db";
-
-
+import customtkinter as ctk  # pyright: ignore[reportMissingImports]
+from tkinter import messagebox
+import subprocess
+import sys
 import os
-import sqlite3
-#import hashlib
-#import binascii
-import datetime
+import db
 
-# Path to the SQLite database file
-DB_PATH = os.path.join(os.path.dirname(__file__), "inventory.db")
+# Initialize DB (creates MySQL DB and tables if needed)
+# Make sure DB_HOST, DB_USER, DB_PASSWORD are set if your MySQL user differs
+db.init_db()
 
+# App Setup
+ctk.set_appearance_mode("light")
+ctk.set_default_color_theme("blue")
 
-def get_connection():
-    """Return a sqlite3 connection with sensible row access."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+app = ctk.CTk()
+app.title("Inventory Management System")
+app.geometry("1000x700")
+app.resizable(True, True)
 
-
-def init_db():
-    """Create the database and users table if they don't exist.
-    Also ensures a default admin account exists (name: admin / password: 1234)."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            email TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL,
-            position TEXT,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.commit()
-
-    # Ensure default admin exists
-    if not get_user_by_name("admin"):
-        try:
-            create_user("admin", "admin@example.com", "1234", "Admin")
-            print("Default admin user created (name: admin, password: 1234).")
-        except Exception as e:
-            # ignore if creation fails for some reason (e.g. concurrent create)
-            print("Could not create default admin user:", e)
-    conn.close()
+# Container for Frames
+container = ctk.CTkFrame(app, fg_color="white")
+container.pack(expand=True, fill="both")
 
 
-def _hash_password(password: str) -> str:
-    """Hash a password using PBKDF2-HMAC-SHA256. Returns salt$hash in hex."""
-    salt = os.urandom(16)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000)
-    salt_hex = binascii.hexlify(salt).decode("ascii")
-    dk_hex = binascii.hexlify(dk).decode("ascii")
-    return f"{salt_hex}${dk_hex}"
+def show_login():
+    signup_frame.pack_forget()
+    login_frame.pack(expand=True, fill="both")
 
 
-def _verify_password(stored: str, password: str) -> bool:
-    """Verify a password against the stored salt$hash string."""
-    try:
-        salt_hex, hash_hex = stored.split("$")
-    except ValueError:
-        return False
-    salt = binascii.unhexlify(salt_hex)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000)
-    return binascii.hexlify(dk).decode("ascii") == hash_hex
+def show_signup():
+    login_frame.pack_forget()
+    signup_frame.pack(expand=True, fill="both")
 
 
-def create_user(name: str, email: str, password: str, position: str = None) -> int:
-    """Insert a new user. Returns the new user's id.
-    Raises ValueError on validation / uniqueness errors."""
+# Login Page
+login_frame = ctk.CTkFrame(container, fg_color="white")
+
+login_title = ctk.CTkLabel(login_frame, text="LOGIN", text_color="black", font=("Helvetica", 28, "bold"))
+login_title.pack(pady=(40, 10))
+
+login_subtitle = ctk.CTkLabel(login_frame, text="Don’t have an account?", text_color="black", font=("Arial", 12))
+login_subtitle.pack()
+
+signup_link = ctk.CTkLabel(login_frame, text="Sign Up", text_color="blue", font=("Arial", 12, "bold"), cursor="hand2")
+signup_link.pack(pady=(0, 30))
+signup_link.bind("<Button-1>", lambda e: show_signup())
+
+# Username (allow either name or email)
+username_label = ctk.CTkLabel(login_frame, text="NAME OR EMAIL", text_color="gray", font=("Arial", 10, "bold"))
+username_label.pack(padx=90)
+username_entry = ctk.CTkEntry(login_frame, width=250, height=35, corner_radius=0, border_width=1, border_color="black")
+username_entry.pack(pady=(5, 20))
+
+# Password
+password_label = ctk.CTkLabel(login_frame, text="PASSWORD", text_color="gray", font=("Arial", 10, "bold"))
+password_label.pack(padx=90)
+password_entry = ctk.CTkEntry(login_frame, width=250, height=35, corner_radius=0, border_width=1, border_color="black", show="*")
+password_entry.pack(pady=(5, 20))
+
+
+# Login Function (uses db.verify_user_credentials)
+def login():
+    name_or_email = username_entry.get().strip()
+    password = password_entry.get().strip()
+    if not name_or_email or not password:
+        messagebox.showerror("Login Failed", "Please enter your name/email and password.")
+        return
+
+    user = db.verify_user_credentials(name_or_email, password)
+    if user:
+        messagebox.showinfo("Login Success", f"Welcome, {user['name']}!")
+        app.destroy()  # close login window
+        # Launch dashboard.py in the same directory
+        python = sys.executable
+        dashboard_path = os.path.join(os.path.dirname(__file__), "dashboard.py")
+        subprocess.run([python, dashboard_path])
+    else:
+        messagebox.showerror("Login Failed", "Invalid username/email or password.")
+
+
+login_button = ctk.CTkButton(login_frame, text="LOGIN", width=100, height=35, fg_color="black",
+                             hover_color="#333", text_color="white", command=login)
+login_button.pack(pady=20)
+
+# Signup Page
+signup_frame = ctk.CTkFrame(container, fg_color="white")
+
+signup_title = ctk.CTkLabel(signup_frame, text="CREATE NEW ACCOUNT", text_color="black", font=("Helvetica", 24, "bold"))
+signup_title.pack(pady=(40, 5))
+
+already_label = ctk.CTkLabel(signup_frame, text="Already Registered?", text_color="black", font=("Arial", 12))
+already_label.pack()
+
+login_link = ctk.CTkLabel(signup_frame, text="Login", text_color="blue", font=("Arial", 12, "bold"), cursor="hand2")
+login_link.pack(pady=(0, 30))
+login_link.bind("<Button-1>", lambda e: show_login())
+
+# Name
+name_label = ctk.CTkLabel(signup_frame, text="NAME", text_color="gray", font=("Arial", 10, "bold"))
+name_label.pack(padx=90)
+name_entry = ctk.CTkEntry(signup_frame, width=250, height=35, corner_radius=0, border_width=1, border_color="black")
+name_entry.pack(pady=(5, 20))
+
+# Email
+email_label = ctk.CTkLabel(signup_frame, text="EMAIL", text_color="gray", font=("Arial", 10, "bold"))
+email_label.pack(padx=90)
+email_entry = ctk.CTkEntry(signup_frame, width=250, height=35, corner_radius=0, border_width=1, border_color="black")
+email_entry.pack(pady=(5, 20))
+
+# Password
+signup_password_label = ctk.CTkLabel(signup_frame, text="PASSWORD", text_color="gray", font=("Arial", 10, "bold"))
+signup_password_label.pack(padx=90)
+signup_password_entry = ctk.CTkEntry(signup_frame, width=250, height=35, corner_radius=0, border_width=1, border_color="black", show="*")
+signup_password_entry.pack(pady=(5, 20))
+
+# Position Dropdown
+position_label = ctk.CTkLabel(signup_frame, text="POSITION", text_color="gray", font=("Arial", 10, "bold"))
+position_label.pack(padx=90)
+position_option = ctk.CTkOptionMenu(signup_frame, values=["Admin", "Manager", "Staff"], fg_color="white", text_color="black", button_color="black", dropdown_text_color="black")
+position_option.pack(pady=(5, 20))
+position_option.set("Staff")
+
+
+# Signup Button (creates DB user)
+def signup():
+    name = name_entry.get().strip()
+    email = email_entry.get().strip()
+    password = signup_password_entry.get().strip()
+    position = position_option.get().strip()
+
     if not name or not email or not password:
-        raise ValueError("Name, email and password are required.")
-    hashed = _hash_password(password)
-    created_at = datetime.datetime.utcnow().isoformat() + "Z"
-    conn = get_connection()
-    cur = conn.cursor()
+        messagebox.showerror("Error", "Please fill in all fields.")
+        return
+
     try:
-        cur.execute(
-            "INSERT INTO users (name, email, password, position, created_at) VALUES (?, ?, ?, ?, ?)",
-            (name, email, hashed, position, created_at),
-        )
-        conn.commit()
-        user_id = cur.lastrowid
-    except sqlite3.IntegrityError as e:
-        conn.rollback()
-        # Provide a friendly error message for unique constraint failures
-        msg = str(e).lower()
-        if "name" in msg or "unique" in msg and "name" in msg:
-            raise ValueError("A user with that name already exists.") from e
-        if "email" in msg:
-            raise ValueError("A user with that email already exists.") from e
-        raise ValueError("Could not create user: " + str(e)) from e
-    finally:
-        conn.close()
-    return user_id
+        db.create_user(name, email, password, position)
+        messagebox.showinfo("Success", f"Account created for {name}!")
+        # After signup, show login page and prefill username
+        show_login()
+        username_entry.delete(0, "end")
+        username_entry.insert(0, name)
+        # clear signup fields
+        name_entry.delete(0, "end")
+        email_entry.delete(0, "end")
+        signup_password_entry.delete(0, "end")
+        position_option.set("Staff")
+    except ValueError as e:
+        messagebox.showerror("Signup Failed", str(e))
+    except Exception as e:
+        messagebox.showerror("Signup Failed", "An unexpected error occurred. " + str(e))
 
 
-def get_user_by_name(name: str):
-    """Return a dict-like row for the user with the given name, or None."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE name = ?", (name,))
-    row = cur.fetchone()
-    conn.close()
-    return row
+signup_button = ctk.CTkButton(signup_frame, text="SIGN UP", width=100, height=35,
+                              fg_color="black", hover_color="#333", text_color="white",
+                              command=signup)
+signup_button.pack(pady=20)
 
+# Default Page
+login_frame.pack(expand=True, fill="both")
 
-def get_user_by_email(email: str):
-    """Return a dict-like row for the user with the given email, or None."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE email = ?", (email,))
-    row = cur.fetchone()
-    conn.close()
-    return row
+# Back Button
+def go_back():
+    app.destroy()  # Close this window
 
+back_btn = ctk.CTkButton(
+    container,
+    text="BACK",
+    width=80,
+    height=30,
+    fg_color="red",
+    hover_color="#333",
+    command=go_back)
 
-def verify_user_credentials(name_or_email: str, password: str):
-    """Verify credentials. Accepts either name or email. Returns user row on success, else None."""
-    # Try name first, then email
-    user = get_user_by_name(name_or_email)
-    if not user:
-        user = get_user_by_email(name_or_email)
-    if not user:
-        return None
-    if _verify_password(user["password"], password):
-        return user
-    return None
+# Place the button at the bottom-right corner
+back_btn.place(relx=0.95, rely=0.95, anchor="se")
+
+app.mainloop()
